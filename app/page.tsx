@@ -539,10 +539,7 @@ export default function PDFTemplateEditor() {
       }
 
       try {
-        // Dynamic import inside the function to ensure it's loaded
         const pdfjsLib = await import("pdfjs-dist");
-
-        // Ensure worker is configured
         if (
           pdfjsLib.GlobalWorkerOptions &&
           !pdfjsLib.GlobalWorkerOptions.workerSrc
@@ -558,20 +555,48 @@ export default function PDFTemplateEditor() {
         const canvas = pdfCanvasRef.current;
         if (!canvas) return;
 
+        const qualityMultiplier = 2; // Render at 2x resolution
+        const editorWidth = 600;
+        const editorHeight = 800;
+
         for (let i = 1; i <= numPages; i++) {
           const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 2 }); // Higher scale for better quality
+          // Get viewport at native scale=1 to calculate fitting scale
+          const viewport = page.getViewport({ scale: 1 });
 
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
+          // Calculate the scale to fit the page within the editor's display dimensions
+          const displayScale = Math.min(
+            editorWidth / viewport.width,
+            editorHeight / viewport.height
+          );
+
+          // Get the viewport at the final render resolution
+          const renderViewport = page.getViewport({
+            scale: displayScale * qualityMultiplier,
+          });
+
+          // Set the hidden canvas to the high-resolution dimensions
+          canvas.width = editorWidth * qualityMultiplier;
+          canvas.height = editorHeight * qualityMultiplier;
           const context = canvas.getContext("2d");
 
           if (context) {
             context.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Center the high-res PDF page render within the high-res canvas
+            const offsetX = (canvas.width - renderViewport.width) / 2;
+            const offsetY = (canvas.height - renderViewport.height) / 2;
+
+            context.save();
+            context.translate(offsetX, offsetY);
+
             await page.render({
               canvasContext: context,
-              viewport: viewport,
+              viewport: renderViewport,
             }).promise;
+
+            context.restore();
+            // The resulting dataURL is a high-resolution image of the centered PDF
             backgroundPdfs.push(canvas.toDataURL("image/png", 1.0));
           }
         }
@@ -669,26 +694,24 @@ export default function PDFTemplateEditor() {
 
     try {
       const pdf = new jsPDF({
-        orientation: "portrait", // will be adjusted per page
+        orientation: "portrait",
         unit: "px",
-        hotfixes: ["px_scaling"], // Important for accurate px scaling
+        hotfixes: ["px_scaling"],
       });
-      pdf.deletePage(1); // Remove the default page
+      pdf.deletePage(1);
 
       const getImageDimensions = (
         dataUrl: string
       ): Promise<{ width: number; height: number }> => {
         return new Promise((resolve, reject) => {
           const img = new Image();
-          img.onload = () => {
-            resolve({ width: img.width, height: img.height });
-          };
-          img.onerror = (err) => {
-            reject(err);
-          };
+          img.onload = () => resolve({ width: img.width, height: img.height });
+          img.onerror = (err) => reject(err);
           img.src = dataUrl;
         });
       };
+
+      const qualityMultiplier = 2; // Must match the multiplier in handlePdfUpload
 
       for (let i = 0; i < (template.pdfPages ?? 0); i++) {
         const pageIndex = i + 1;
@@ -709,24 +732,11 @@ export default function PDFTemplateEditor() {
           (area) => area.page === pageIndex
         );
 
-        const editorWidth = 600;
-        const editorHeight = 800;
-
-        // This logic assumes the background is displayed with 'contain' in a 600x800 box.
-        const scale = Math.min(
-          editorWidth / pdfPageWidth,
-          editorHeight / pdfPageHeight
-        );
-        const scaledPdfWidth = pdfPageWidth * scale;
-        const scaledPdfHeight = pdfPageHeight * scale;
-        const offsetX = (editorWidth - scaledPdfWidth) / 2;
-        const offsetY = (editorHeight - scaledPdfHeight) / 2;
-
         areasForPage.forEach((area) => {
-          const x_on_pdf = (area.x - offsetX) / scale;
-          const y_on_pdf = (area.y - offsetY) / scale;
-          const width_on_pdf = area.width / scale;
-          const height_on_pdf = area.height / scale;
+          const x_on_pdf = area.x * qualityMultiplier;
+          const y_on_pdf = area.y * qualityMultiplier;
+          const width_on_pdf = area.width * qualityMultiplier;
+          const height_on_pdf = area.height * qualityMultiplier;
 
           if (
             (area.type === "text" ||
@@ -734,24 +744,20 @@ export default function PDFTemplateEditor() {
               area.type === "variable") &&
             area.value
           ) {
-            const scaledFontSize = area.fontSize / scale;
+            const scaledFontSize = area.fontSize * qualityMultiplier;
             pdf.setFontSize(scaledFontSize);
             pdf.setFont("helvetica", area.fontWeight);
-            pdf.setTextColor(0, 0, 0); // Black color
+            pdf.setTextColor(0, 0, 0);
 
-            // jsPDF's y-coordinate is the baseline. Adjust for top-left alignment.
-            const textY = y_on_pdf + scaledFontSize;
+            const textY = y_on_pdf + scaledFontSize * 0.9; // Adjust for baseline
 
             const textLines = pdf.splitTextToSize(area.value, width_on_pdf);
-            pdf.text(textLines, x_on_pdf, textY, {
-              align: "left",
-            });
+            pdf.text(textLines, x_on_pdf, textY, { align: "left" });
           } else if (area.type === "image" && area.value) {
             try {
-              // Simple stretch to fit the defined area.
               pdf.addImage(
                 area.value,
-                "PNG", // Assume PNG, could be others
+                "PNG",
                 x_on_pdf,
                 y_on_pdf,
                 width_on_pdf,
@@ -759,9 +765,8 @@ export default function PDFTemplateEditor() {
               );
             } catch (e) {
               console.error("Error adding image to PDF:", e);
-              // Draw a placeholder if image fails
               pdf.setDrawColor(255, 0, 0);
-              pdf.rect(x_on_pdf, y_on_pdf, width_on_pdf, height_on_pdf, "S"); // 'S' for stroke
+              pdf.rect(x_on_pdf, y_on_pdf, width_on_pdf, height_on_pdf, "S");
               pdf.text("Image Error", x_on_pdf + 2, y_on_pdf + 12);
             }
           }
