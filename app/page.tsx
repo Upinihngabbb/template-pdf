@@ -37,7 +37,11 @@ interface TextArea {
   height: number;
   variableName: string;
   value: string;
-  type: "text" | "image" | "date";
+  type: "text" | "image" | "date" | "variable";
+  page: number;
+  fontSize: number;
+  fontWeight: "normal" | "bold";
+  imageFit?: "contain" | "cover" | "blur-bg" | "auto-resize"; // Tambah property baru
 }
 
 interface Template {
@@ -48,6 +52,12 @@ interface Template {
   currentPage?: number;
 }
 
+interface ProjectDetails {
+  id: string;
+  name: string;
+  [key: string]: any;
+}
+
 export default function PDFTemplateEditor() {
   const [template, setTemplate] = useState<Template>({
     name: "Template Baru",
@@ -55,6 +65,94 @@ export default function PDFTemplateEditor() {
     backgroundPdfs: [],
     currentPage: 1,
   });
+  const [selectedProject, setSelectedProject] = useState<ProjectDetails | null>(
+    null
+  );
+  const [projectVariables, setProjectVariables] = useState<string[]>([]);
+  const [manualApiVariables, setManualApiVariables] = useState<string[]>([
+    "name",
+    "meetingTasks",
+    "organization",
+    "extCustomerId",
+    "scope",
+    "leader",
+    "deadline",
+    "start",
+    "end",
+    "submitDrawingDeadline",
+    "approvalDrawingDeadline",
+    "approvalMaterialDeadline",
+    "purchaseRequestDeadline",
+    "scheduleArriveMaterial",
+    "productionDeadline",
+    "qcDeadline",
+    "fatDeadline",
+    "deliveryDeadline",
+    "installDeadline",
+    "atpDeadline",
+    "grReceivedDeadline",
+    "invoiceDeadline",
+    "extJdpPresetId",
+    "duration",
+    "cost",
+    "budget",
+    "kickOffMeeting",
+    "closing",
+    "remark",
+    "sequenceNumber",
+    "romanNumber",
+    "projectIdManual",
+    "poNumber",
+    "poDate",
+    "poExp",
+    "contractNumber",
+    "contractDate",
+    "contractExp",
+    "hasSubSchedule",
+    "hasProjectProducts",
+    "projectPos",
+    "projectContracts",
+    "city",
+    "projectDeliverables",
+    "projectRisks",
+    "projectTemplate",
+    "projectTemplateItemProjectDeliverables",
+    "projectTemplateGroup",
+    "projectProducts",
+    "projectProductDetails",
+    "projectTemplateItemDates",
+    "projectProductTemplateDates",
+    "projectProductDetailDates",
+    "projectProjectTemplateSubScheduleDates",
+    "projectStakeholders",
+    "projectCommunicationModes",
+    "projectExcelFiles",
+    "projectCostAccumulationItems",
+    "projectStakeholderPics",
+    "top",
+    "subProjects",
+    "projectNote",
+    "extPurchaseOrderId",
+    "projectProductBatches",
+    "projectPurchaseOrders",
+    "projectProjectDocumentMasterTemplates",
+    "projectBPOs",
+    "objective",
+    "deliverables",
+    "constraints",
+    "keyStakeholders",
+    "communicationPlan",
+    "riskManagementPlan",
+    "resourceAllocation",
+    "projectType",
+    "id",
+    "uuid",
+    "ordering",
+    "hidden",
+    "createdAt",
+    "updatedAt",
+    "extCreatedById",
+  ]);
   const [isCreatingArea, setIsCreatingArea] = useState(false);
   const [isDraggingArea, setIsDraggingArea] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({
@@ -64,9 +162,9 @@ export default function PDFTemplateEditor() {
   const [selectedArea, setSelectedArea] = useState<TextArea | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
-  const [creatingType, setCreatingType] = useState<"text" | "image" | "date">(
-    "text"
-  );
+  const [creatingType, setCreatingType] = useState<
+    "text" | "image" | "date" | "variable"
+  >("text");
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(
     null
   );
@@ -207,6 +305,106 @@ export default function PDFTemplateEditor() {
     };
   }, [isResizing, resizeHandle, selectedArea, setTemplate]);
 
+  // Update variable name
+  const updateVariableName = useCallback(
+    (id: string, variableName: string) => {
+      setTemplate((prev) => ({
+        ...prev,
+        textAreas: prev.textAreas.map((area) =>
+          area.id === id ? { ...area, variableName } : area
+        ),
+      }));
+
+      // Only attempt to fetch data if a project is selected
+      if (selectedProject) {
+        fetch(`/api/external-projects/${selectedProject.id}`)
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error("Failed to fetch project details");
+            }
+            return response.json();
+          })
+          .then((projectDetails) => {
+            const value = projectDetails[variableName];
+            const displayValue =
+              value && typeof value === "object" && "name" in value
+                ? value.name
+                : value === null || value === undefined
+                ? ""
+                : typeof value === "object"
+                ? JSON.stringify(value, null, 2)
+                : String(value);
+
+            setTemplate((prev) => ({
+              ...prev,
+              textAreas: prev.textAreas.map((area) =>
+                area.id === id ? { ...area, value: displayValue } : area
+              ),
+            }));
+          })
+          .catch((error) => {
+            console.error("Error fetching variable value:", error);
+            // If fetching fails, clear the value for this variable
+            setTemplate((prev) => ({
+              ...prev,
+              textAreas: prev.textAreas.map((area) =>
+                area.id === id ? { ...area, value: "" } : area
+              ),
+            }));
+          });
+      }
+    },
+    [selectedProject, setTemplate]
+  );
+
+  // Update variable value dengan auto-resize untuk gambar
+  const updateVariableValue = useCallback(
+    (id: string, value: string) => {
+      setTemplate((prev) => ({
+        ...prev,
+        textAreas: prev.textAreas.map((area) => {
+          if (area.id === id) {
+            // Jika type image dan imageFit adalah auto-resize, hitung ulang dimensi
+            if (
+              area.type === "image" &&
+              area.imageFit === "auto-resize" &&
+              value
+            ) {
+              const img = new Image();
+              img.onload = () => {
+                const aspectRatio = img.width / img.height;
+                setTemplate((prev) => ({
+                  ...prev,
+                  textAreas: prev.textAreas.map((a) => {
+                    if (a.id === id) {
+                      let newWidth = a.width;
+                      let newHeight = a.height;
+
+                      if (aspectRatio > 1) {
+                        // Landscape - maintain width, adjust height
+                        newHeight = a.width / aspectRatio;
+                      } else {
+                        // Portrait - maintain height, adjust width
+                        newWidth = a.height * aspectRatio;
+                      }
+
+                      return { ...a, width: newWidth, height: newHeight };
+                    }
+                    return a;
+                  }),
+                }));
+              };
+              img.src = value;
+            }
+            return { ...area, value };
+          }
+          return area;
+        }),
+      }));
+    },
+    [setTemplate]
+  );
+
   // Handle mouse down untuk mulai membuat area atau drag area existing
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -283,15 +481,31 @@ export default function PDFTemplateEditor() {
           y: Math.min(dragStart.y, y),
           width,
           height,
-          variableName: `variable_${template.textAreas.length + 1}`,
+          variableName:
+            creatingType === "variable"
+              ? "name"
+              : `variable_${template.textAreas.length + 1}`,
           value: "",
           type: creatingType,
+          page: template.currentPage ?? 1,
+          fontSize: 16,
+          fontWeight: "normal",
+          imageFit: "contain", // Default ke contain (Fit All) untuk area image
         };
 
-        setTemplate((prev) => ({
-          ...prev,
-          textAreas: [...prev.textAreas, newArea],
-        }));
+        setTemplate((prev) => {
+          const updatedTextAreas = [...prev.textAreas, newArea];
+          return {
+            ...prev,
+            textAreas: updatedTextAreas,
+          };
+        });
+
+        // If a variable area is created and a project is already selected,
+        // immediately try to fetch its value.
+        if (creatingType === "variable" && selectedProject) {
+          updateVariableName(newArea.id, newArea.variableName);
+        }
       }
 
       setDragStart(null);
@@ -303,127 +517,116 @@ export default function PDFTemplateEditor() {
       template.textAreas.length,
       isDraggingArea,
       creatingType,
+      selectedProject, // Add selectedProject to dependencies
+      updateVariableName, // Add updateVariableName to dependencies
     ]
   );
 
   // Upload PDF file with better error handling
-  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handlePdfUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-    if (file.type !== "application/pdf") {
-      alert("Please select a PDF file");
-      return;
-    }
-
-    if (!pdfLoaded) {
-      alert("PDF library is still loading. Please try again in a moment.");
-      return;
-    }
-
-    try {
-      // Dynamic import inside the function to ensure it's loaded
-      const pdfjsLib = await import("pdfjs-dist");
-
-      // Ensure worker is configured
-      if (
-        pdfjsLib.GlobalWorkerOptions &&
-        !pdfjsLib.GlobalWorkerOptions.workerSrc
-      ) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+      if (file.type !== "application/pdf") {
+        alert("Please select a PDF file");
+        return;
       }
 
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const numPages = pdf.numPages;
-      const backgroundPdfs: string[] = [];
+      if (!pdfLoaded) {
+        alert("PDF library is still loading. Please try again in a moment.");
+        return;
+      }
 
-      const canvas = pdfCanvasRef.current;
-      if (!canvas) return;
+      try {
+        // Dynamic import inside the function to ensure it's loaded
+        const pdfjsLib = await import("pdfjs-dist");
 
-      for (let i = 1; i <= numPages; i++) {
-        const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 2 }); // Higher scale for better quality
-
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const context = canvas.getContext("2d");
-
-        if (context) {
-          context.clearRect(0, 0, canvas.width, canvas.height);
-          await page.render({
-            canvasContext: context,
-            viewport: viewport,
-          }).promise;
-          backgroundPdfs.push(canvas.toDataURL("image/png", 1.0));
+        // Ensure worker is configured
+        if (
+          pdfjsLib.GlobalWorkerOptions &&
+          !pdfjsLib.GlobalWorkerOptions.workerSrc
+        ) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
         }
-      }
 
-      setTemplate((prev) => ({
-        ...prev,
-        backgroundPdfs,
-        pdfPages: numPages,
-        currentPage: 1,
-      }));
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const numPages = pdf.numPages;
+        const backgroundPdfs: string[] = [];
 
-      console.log(`PDF with ${numPages} pages loaded successfully`);
-    } catch (error) {
-      console.error("Error loading PDF:", error);
-      alert(
-        `Error loading PDF file: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
-    }
-  };
+        const canvas = pdfCanvasRef.current;
+        if (!canvas) return;
 
-  // Fallback PDF upload using FileReader (for when PDF.js fails)
-  const handleFallbackPdfUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+        for (let i = 1; i <= numPages; i++) {
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 2 }); // Higher scale for better quality
 
-    if (file.type !== "application/pdf") {
-      alert("Please select a PDF file");
-      return;
-    }
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const context = canvas.getContext("2d");
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result;
-      if (result) {
-        // For fallback, we'll just show a placeholder
+          if (context) {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            await page.render({
+              canvasContext: context,
+              viewport: viewport,
+            }).promise;
+            backgroundPdfs.push(canvas.toDataURL("image/png", 1.0));
+          }
+        }
+
         setTemplate((prev) => ({
           ...prev,
-          backgroundPdf:
-            "/placeholder.svg?height=800&width=600&text=PDF+Background",
-          pdfPages: 1,
+          backgroundPdfs,
+          pdfPages: numPages,
           currentPage: 1,
         }));
-        console.log("PDF uploaded (fallback mode)");
+
+        console.log(`PDF with ${numPages} pages loaded successfully`);
+      } catch (error) {
+        console.error("Error loading PDF:", error);
+        alert(
+          `Error loading PDF file: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`
+        );
       }
-    };
-    reader.readAsDataURL(file);
-  };
+    },
+    [pdfLoaded, setTemplate]
+  );
 
-  // Update variable value
-  const updateVariableValue = (id: string, value: string) => {
-    setTemplate((prev) => ({
-      ...prev,
-      textAreas: prev.textAreas.map((area) =>
-        area.id === id ? { ...area, value } : area
-      ),
-    }));
-  };
+  // Fallback PDF upload using FileReader (for when PDF.js fails)
+  const handleFallbackPdfUpload = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-  // Update variable name
-  const updateVariableName = (id: string, variableName: string) => {
-    setTemplate((prev) => ({
-      ...prev,
-      textAreas: prev.textAreas.map((area) =>
-        area.id === id ? { ...area, variableName } : area
-      ),
-    }));
-  };
+      if (file.type !== "application/pdf") {
+        alert("Please select a PDF file");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result;
+        if (result) {
+          // For fallback, we'll just show a placeholder
+          setTemplate((prev) => ({
+            ...prev,
+            backgroundPdfs: [
+              "/placeholder.svg?height=800&width=600&text=PDF+Background",
+            ],
+            pdfPages: 1,
+            currentPage: 1,
+          }));
+          console.log("PDF uploaded (fallback mode)");
+        }
+      };
+      reader.readAsDataURL(file);
+    },
+    [setTemplate]
+  );
 
   // Delete text area
   const deleteTextArea = (id: string) => {
@@ -437,41 +640,134 @@ export default function PDFTemplateEditor() {
   };
 
   // Export template
-  const exportTemplate = () => {
-    const dataStr = JSON.stringify(template, null, 2);
+  const exportTemplate = async () => {
+    // Create a template object for export without variable values
+    const templateToExport = {
+      ...template,
+      textAreas: template.textAreas.map(({ value, ...rest }) => rest), // Exclude value
+    };
+
+    // Export JSON
+    const dataStr = JSON.stringify(templateToExport, null, 2);
     const dataUri =
       "data:application/json;charset=utf-8," + encodeURIComponent(dataStr);
-
-    const exportFileDefaultName = `${template.name.replace(/\s+/g, "_")}.json`;
-
-    const linkElement = document.createElement("a");
-    linkElement.setAttribute("href", dataUri);
-    linkElement.setAttribute("download", exportFileDefaultName);
-    linkElement.click();
+    const jsonExportName = `${template.name.replace(/\s+/g, "_")}.json`;
+    const jsonLink = document.createElement("a");
+    jsonLink.setAttribute("href", dataUri);
+    jsonLink.setAttribute("download", jsonExportName);
+    document.body.appendChild(jsonLink);
+    jsonLink.click();
+    document.body.removeChild(jsonLink);
   };
 
   // Export as PDF
   const exportAsPdf = async () => {
-    if (!previewRef.current) {
-      alert("Preview area not found.");
+    if (!template.backgroundPdfs || template.backgroundPdfs.length === 0) {
+      alert("Please upload a PDF background first.");
       return;
     }
 
     try {
-      const canvas = await html2canvas(previewRef.current, {
-        scale: 2, // Higher scale for better quality
-        useCORS: true,
-        logging: true,
-      });
-
-      const imgData = canvas.toDataURL("image/png");
       const pdf = new jsPDF({
-        orientation: "portrait",
+        orientation: "portrait", // will be adjusted per page
         unit: "px",
-        format: [canvas.width, canvas.height],
+        hotfixes: ["px_scaling"], // Important for accurate px scaling
       });
+      pdf.deletePage(1); // Remove the default page
 
-      pdf.addImage(imgData, "PNG", 0, 0, canvas.width, canvas.height);
+      const getImageDimensions = (
+        dataUrl: string
+      ): Promise<{ width: number; height: number }> => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            resolve({ width: img.width, height: img.height });
+          };
+          img.onerror = (err) => {
+            reject(err);
+          };
+          img.src = dataUrl;
+        });
+      };
+
+      for (let i = 0; i < (template.pdfPages ?? 0); i++) {
+        const pageIndex = i + 1;
+        const bgImageDataUrl = template.backgroundPdfs?.[i];
+        if (!bgImageDataUrl) continue;
+
+        const pageDimensions = await getImageDimensions(bgImageDataUrl);
+        const pdfPageWidth = pageDimensions.width;
+        const pdfPageHeight = pageDimensions.height;
+
+        const orientation =
+          pdfPageWidth > pdfPageHeight ? "landscape" : "portrait";
+        pdf.addPage([pdfPageWidth, pdfPageHeight], orientation);
+
+        pdf.addImage(bgImageDataUrl, "PNG", 0, 0, pdfPageWidth, pdfPageHeight);
+
+        const areasForPage = template.textAreas.filter(
+          (area) => area.page === pageIndex
+        );
+
+        const editorWidth = 600;
+        const editorHeight = 800;
+
+        // This logic assumes the background is displayed with 'contain' in a 600x800 box.
+        const scale = Math.min(
+          editorWidth / pdfPageWidth,
+          editorHeight / pdfPageHeight
+        );
+        const scaledPdfWidth = pdfPageWidth * scale;
+        const scaledPdfHeight = pdfPageHeight * scale;
+        const offsetX = (editorWidth - scaledPdfWidth) / 2;
+        const offsetY = (editorHeight - scaledPdfHeight) / 2;
+
+        areasForPage.forEach((area) => {
+          const x_on_pdf = (area.x - offsetX) / scale;
+          const y_on_pdf = (area.y - offsetY) / scale;
+          const width_on_pdf = area.width / scale;
+          const height_on_pdf = area.height / scale;
+
+          if (
+            (area.type === "text" ||
+              area.type === "date" ||
+              area.type === "variable") &&
+            area.value
+          ) {
+            const scaledFontSize = area.fontSize / scale;
+            pdf.setFontSize(scaledFontSize);
+            pdf.setFont("helvetica", area.fontWeight);
+            pdf.setTextColor(0, 0, 0); // Black color
+
+            // jsPDF's y-coordinate is the baseline. Adjust for top-left alignment.
+            const textY = y_on_pdf + scaledFontSize;
+
+            const textLines = pdf.splitTextToSize(area.value, width_on_pdf);
+            pdf.text(textLines, x_on_pdf, textY, {
+              align: "left",
+            });
+          } else if (area.type === "image" && area.value) {
+            try {
+              // Simple stretch to fit the defined area.
+              pdf.addImage(
+                area.value,
+                "PNG", // Assume PNG, could be others
+                x_on_pdf,
+                y_on_pdf,
+                width_on_pdf,
+                height_on_pdf
+              );
+            } catch (e) {
+              console.error("Error adding image to PDF:", e);
+              // Draw a placeholder if image fails
+              pdf.setDrawColor(255, 0, 0);
+              pdf.rect(x_on_pdf, y_on_pdf, width_on_pdf, height_on_pdf, "S"); // 'S' for stroke
+              pdf.text("Image Error", x_on_pdf + 2, y_on_pdf + 12);
+            }
+          }
+        });
+      }
+
       pdf.save(`${template.name.replace(/\s+/g, "_")}.pdf`);
     } catch (error) {
       console.error("Error exporting to PDF:", error);
@@ -484,6 +780,34 @@ export default function PDFTemplateEditor() {
   };
 
   // Import template
+  const handleValuesImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const result = event.target?.result;
+        if (typeof result === "string") {
+          const importedValues = JSON.parse(result);
+          setTemplate((prev) => ({
+            ...prev,
+            textAreas: prev.textAreas.map((area) => ({
+              ...area,
+              value:
+                importedValues[area.variableName] !== undefined
+                  ? importedValues[area.variableName]
+                  : area.value,
+            })),
+          }));
+        }
+      } catch (error) {
+        console.error("Error parsing values file:", error);
+        alert("Invalid values file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const handleTemplateImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -503,14 +827,121 @@ export default function PDFTemplateEditor() {
     reader.readAsText(file);
   };
 
-  const handleSelectProject = (project: any) => {
+  // Save variable values
+  const saveVariableValues = () => {
+    const areaData = template.textAreas.reduce((acc, area) => {
+      acc[area.variableName] = area.value;
+      return acc;
+    }, {} as Record<string, string>);
+
+    const dataValuesStr = JSON.stringify(areaData, null, 2);
+    const dataValuesUri =
+      "data:application/json;charset=utf-8," +
+      encodeURIComponent(dataValuesStr);
+    const dataExportName = `${template.name.replace(/\s+/g, "_")}_data.json`;
+    const dataLink = document.createElement("a");
+    dataLink.setAttribute("href", dataValuesUri);
+    dataLink.setAttribute("download", dataExportName);
+    document.body.appendChild(dataLink);
+    dataLink.click();
+    document.body.removeChild(dataLink);
+  };
+
+  const handleSelectProject = (project: ProjectDetails) => {
+    setSelectedProject(project);
+    setProjectVariables(Object.keys(project));
     const newTextAreas = template.textAreas.map((area) => {
       if (project.hasOwnProperty(area.variableName)) {
-        return { ...area, value: project[area.variableName] };
+        const value = project[area.variableName];
+        const displayValue =
+          value && typeof value === "object" && "name" in value
+            ? value.name
+            : value === null || value === undefined
+            ? ""
+            : typeof value === "object"
+            ? JSON.stringify(value, null, 2)
+            : String(value);
+        return { ...area, value: displayValue };
       }
       return area;
     });
     setTemplate((prev) => ({ ...prev, textAreas: newTextAreas }));
+  };
+
+  // Komponen untuk render gambar dengan berbagai mode
+  const renderImageArea = (area: TextArea) => {
+    if (!area.value) {
+      return (
+        <div className="w-full h-full bg-gray-200 bg-opacity-50 flex items-center justify-center text-gray-500 text-xs">
+          {area.variableName}
+        </div>
+      );
+    }
+
+    switch (area.imageFit) {
+      case "blur-bg":
+        return (
+          <div className="w-full h-full relative overflow-hidden">
+            {/* Background blur */}
+            <div
+              className="absolute inset-0"
+              style={{
+                backgroundImage: `url(${area.value})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+                filter: "blur(10px) brightness(0.7)",
+                transform: "scale(1.1)",
+              }}
+            />
+
+            {/* Gambar utuh di tengah */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <img
+                src={area.value}
+                alt={area.variableName}
+                className="max-w-full max-h-full object-contain"
+                style={{ filter: "drop-shadow(0 4px 8px rgba(0,0,0,0.3))" }}
+              />
+            </div>
+          </div>
+        );
+
+      case "contain":
+        return (
+          <img
+            src={area.value}
+            alt={area.variableName}
+            className="w-full h-full object-contain"
+          />
+        );
+
+      case "cover":
+        return (
+          <img
+            src={area.value}
+            alt={area.variableName}
+            className="w-full h-full object-cover"
+          />
+        );
+
+      case "auto-resize":
+        return (
+          <img
+            src={area.value}
+            alt={area.variableName}
+            className="w-full h-full object-contain"
+          />
+        );
+
+      default:
+        return (
+          <img
+            src={area.value}
+            alt={area.variableName}
+            className="w-full h-full object-contain"
+          />
+        );
+    }
   };
 
   return (
@@ -587,8 +1018,9 @@ export default function PDFTemplateEditor() {
                   />
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
+                    size="sm"
                     onClick={() => {
                       setIsCreatingArea(true);
                       setCreatingType("text");
@@ -602,6 +1034,7 @@ export default function PDFTemplateEditor() {
                       : "Tambah Area Teks"}
                   </Button>
                   <Button
+                    size="sm"
                     onClick={() => {
                       setIsCreatingArea(true);
                       setCreatingType("date");
@@ -615,6 +1048,7 @@ export default function PDFTemplateEditor() {
                       : "Tambah Area Tanggal"}
                   </Button>
                   <Button
+                    size="sm"
                     onClick={() => {
                       setIsCreatingArea(true);
                       setCreatingType("image");
@@ -628,6 +1062,21 @@ export default function PDFTemplateEditor() {
                       : "Tambah Area Gambar"}
                   </Button>
                   <Button
+                    size="sm"
+                    onClick={() => {
+                      setIsCreatingArea(true);
+                      setCreatingType("variable");
+                    }}
+                    disabled={isCreatingArea}
+                    className="flex items-center gap-2"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {isCreatingArea
+                      ? "Klik dan drag untuk membuat area"
+                      : "Tambah Area Variabel"}
+                  </Button>
+                  <Button
+                    size="sm"
                     onClick={exportTemplate}
                     variant="outline"
                     className="flex items-center gap-2 bg-transparent"
@@ -636,6 +1085,7 @@ export default function PDFTemplateEditor() {
                     Export Template
                   </Button>
                   <Button
+                    size="sm"
                     onClick={() =>
                       document.getElementById("import-template")?.click()
                     }
@@ -652,7 +1102,33 @@ export default function PDFTemplateEditor() {
                     className="hidden"
                     onChange={handleTemplateImport}
                   />
-                  <ConfigureData onSelectProject={handleSelectProject} />
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      document.getElementById("import-values")?.click()
+                    }
+                    variant="outline"
+                    className="flex items-center gap-2 bg-transparent"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Import Data
+                  </Button>
+                  <input
+                    id="import-values"
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={handleValuesImport}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={saveVariableValues}
+                    variant="outline"
+                    className="flex items-center gap-2 bg-transparent"
+                  >
+                    <Download className="h-4 w-4" />
+                    Save Data
+                  </Button>
                 </div>
 
                 {isCreatingArea && (
@@ -722,71 +1198,76 @@ export default function PDFTemplateEditor() {
                       />
 
                       {/* Render text areas */}
-                      {template.textAreas.map((area) => (
-                        <div
-                          key={area.id}
-                          className={`absolute border-2 ${
-                            selectedArea?.id === area.id
-                              ? "border-blue-600"
-                              : "border-blue-400"
-                          } ${
-                            isDraggingArea === area.id
-                              ? "border-blue-600 shadow-lg"
-                              : ""
-                          } flex items-center justify-center text-xs font-medium text-blue-700 transition-all duration-200 hover:border-blue-600 pointer-events-none`}
-                          style={{
-                            left: `${(area.x / 600) * 100}%`,
-                            top: `${(area.y / 800) * 100}%`,
-                            width: `${(area.width / 600) * 100}%`,
-                            height: `${(area.height / 800) * 100}%`,
-                            backgroundColor: "transparent",
-                            cursor: isCreatingArea ? "crosshair" : "grab",
-                          }}
-                        >
-                          <div className="pointer-events-none w-full h-full flex items-center justify-center">
-                            <span className="bg-white bg-opacity-80 px-1 py-0.5 rounded text-center">
-                              {area.variableName}
-                            </span>
-                          </div>
+                      {template.textAreas
+                        .filter(
+                          (area) => area.page === (template.currentPage ?? 1)
+                        )
+                        .map((area) => (
+                          <div
+                            key={area.id}
+                            className={`absolute border-2 ${
+                              selectedArea?.id === area.id
+                                ? "border-blue-600"
+                                : "border-blue-400"
+                            } ${
+                              isDraggingArea === area.id
+                                ? "border-blue-600 shadow-lg"
+                                : ""
+                            } flex items-center justify-center text-xs font-medium text-blue-700 transition-all duration-200 hover:border-blue-600 pointer-events-none`}
+                            style={{
+                              left: `${(area.x / 600) * 100}%`,
+                              top: `${(area.y / 800) * 100}%`,
+                              width: `${(area.width / 600) * 100}%`,
+                              height: `${(area.height / 800) * 100}%`,
+                              backgroundColor: "transparent",
+                              cursor: isCreatingArea ? "crosshair" : "grab",
+                            }}
+                          >
+                            <div className="pointer-events-none w-full h-full flex items-center justify-center">
+                              <span className="bg-white bg-opacity-80 px-1 py-0.5 rounded text-center">
+                                {area.variableName}
+                              </span>
+                            </div>
 
-                          {selectedArea?.id === area.id && !isCreatingArea && (
-                            <>
-                              <div
-                                className="absolute -right-1.5 -top-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nesw-resize pointer-events-auto"
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  setIsResizing(true);
-                                  setResizeHandle("ne");
-                                }}
-                              />
-                              <div
-                                className="absolute -right-1.5 -bottom-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nwse-resize pointer-events-auto"
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  setIsResizing(true);
-                                  setResizeHandle("se");
-                                }}
-                              />
-                              <div
-                                className="absolute -left-1.5 -bottom-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nesw-resize pointer-events-auto"
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  setIsResizing(true);
-                                  setResizeHandle("sw");
-                                }}
-                              />
-                              <div
-                                className="absolute -left-1.5 -top-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nwse-resize pointer-events-auto"
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  setIsResizing(true);
-                                  setResizeHandle("nw");
-                                }}
-                              />
-                            </>
-                          )}
-                        </div>
-                      ))}
+                            {selectedArea?.id === area.id &&
+                              !isCreatingArea && (
+                                <>
+                                  <div
+                                    className="absolute -right-1.5 -top-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nesw-resize pointer-events-auto"
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      setIsResizing(true);
+                                      setResizeHandle("ne");
+                                    }}
+                                  />
+                                  <div
+                                    className="absolute -right-1.5 -bottom-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nwse-resize pointer-events-auto"
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      setIsResizing(true);
+                                      setResizeHandle("se");
+                                    }}
+                                  />
+                                  <div
+                                    className="absolute -left-1.5 -bottom-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nesw-resize pointer-events-auto"
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      setIsResizing(true);
+                                      setResizeHandle("sw");
+                                    }}
+                                  />
+                                  <div
+                                    className="absolute -left-1.5 -top-1.5 w-3 h-3 rounded-full bg-blue-600 border-2 border-white cursor-nwse-resize pointer-events-auto"
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      setIsResizing(true);
+                                      setResizeHandle("nw");
+                                    }}
+                                  />
+                                </>
+                              )}
+                          </div>
+                        ))}
                     </div>
                   </CardContent>
                 </Card>
@@ -878,14 +1359,33 @@ export default function PDFTemplateEditor() {
                                 </Button>
                               </div>
                             </div>
-                            <Input
-                              value={area.variableName}
-                              onChange={(e) =>
-                                updateVariableName(area.id, e.target.value)
-                              }
-                              placeholder="Nama variabel"
-                              className="text-sm"
-                            />
+                            {area.type === "variable" ? (
+                              <select
+                                value={area.variableName}
+                                onChange={(e) =>
+                                  updateVariableName(area.id, e.target.value)
+                                }
+                                className="text-sm border rounded-md p-2 w-full"
+                              >
+                                <option value="" disabled>
+                                  Select a variable
+                                </option>
+                                {manualApiVariables.map((variable) => (
+                                  <option key={variable} value={variable}>
+                                    {variable}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <Input
+                                value={area.variableName}
+                                onChange={(e) =>
+                                  updateVariableName(area.id, e.target.value)
+                                }
+                                placeholder="Nama variabel"
+                                className="text-sm"
+                              />
+                            )}
                             <div className="text-xs text-gray-500">
                               Posisi: ({Math.round(area.x)},{" "}
                               {Math.round(area.y)})
@@ -893,6 +1393,129 @@ export default function PDFTemplateEditor() {
                               Ukuran: {Math.round(area.width)} ×{" "}
                               {Math.round(area.height)}
                             </div>
+
+                            {/* Controls untuk area image */}
+                            {area.type === "image" && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Label
+                                    htmlFor={`image-fit-${area.id}`}
+                                    className="text-xs"
+                                  >
+                                    Image Display
+                                  </Label>
+                                  <select
+                                    id={`image-fit-${area.id}`}
+                                    value={area.imageFit || "blur-bg"}
+                                    onChange={(e) =>
+                                      setTemplate((prev) => ({
+                                        ...prev,
+                                        textAreas: prev.textAreas.map((a) =>
+                                          a.id === area.id
+                                            ? {
+                                                ...a,
+                                                imageFit: e.target.value as
+                                                  | "contain"
+                                                  | "cover"
+                                                  | "blur-bg"
+                                                  | "auto-resize",
+                                              }
+                                            : a
+                                        ),
+                                      }))
+                                    }
+                                    className="text-sm border rounded-md p-1 flex-1"
+                                  >
+                                    <option value="contain">
+                                      Fit All (may have space)
+                                    </option>
+                                    <option value="cover">
+                                      Fill Area (may crop)
+                                    </option>
+                                  </select>
+                                </div>
+
+                                {area.imageFit === "blur-bg" && (
+                                  <div className="text-xs text-green-600 bg-green-50 p-2 rounded">
+                                    💡 Mode blur background: Gambar utuh
+                                    ditampilkan dengan background blur artistik
+                                  </div>
+                                )}
+
+                                {area.imageFit === "auto-resize" && (
+                                  <div className="text-xs text-blue-600 bg-blue-50 p-2 rounded">
+                                    🔧 Mode auto-resize: Area akan otomatis
+                                    menyesuaikan ukuran gambar
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Controls untuk non-image areas */}
+                            {area.type !== "image" && (
+                              <>
+                                <div className="flex items-center gap-2">
+                                  <Label
+                                    htmlFor={`font-size-${area.id}`}
+                                    className="text-xs"
+                                  >
+                                    Font Size
+                                  </Label>
+                                  <Input
+                                    id={`font-size-${area.id}`}
+                                    type="number"
+                                    value={area.fontSize}
+                                    onChange={(e) =>
+                                      setTemplate((prev) => ({
+                                        ...prev,
+                                        textAreas: prev.textAreas.map((a) =>
+                                          a.id === area.id
+                                            ? {
+                                                ...a,
+                                                fontSize: parseInt(
+                                                  e.target.value
+                                                ),
+                                              }
+                                            : a
+                                        ),
+                                      }))
+                                    }
+                                    className="text-sm h-8"
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Label
+                                    htmlFor={`font-weight-${area.id}`}
+                                    className="text-xs"
+                                  >
+                                    Font Weight
+                                  </Label>
+                                  <select
+                                    id={`font-weight-${area.id}`}
+                                    value={area.fontWeight}
+                                    onChange={(e) =>
+                                      setTemplate((prev) => ({
+                                        ...prev,
+                                        textAreas: prev.textAreas.map((a) =>
+                                          a.id === area.id
+                                            ? {
+                                                ...a,
+                                                fontWeight: e.target.value as
+                                                  | "normal"
+                                                  | "bold",
+                                              }
+                                            : a
+                                        ),
+                                      }))
+                                    }
+                                    className="text-sm border rounded-md p-1"
+                                  >
+                                    <option value="normal">Normal</option>
+                                    <option value="bold">Bold</option>
+                                  </select>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))
                       )}
@@ -903,154 +1526,222 @@ export default function PDFTemplateEditor() {
             </div>
           </TabsContent>
 
-          <TabsContent value="fill" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Isi Template: {template.name}</CardTitle>
-                <CardDescription>
-                  Masukkan nilai untuk setiap variabel yang telah dibuat
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {template.textAreas.length === 0 ? (
-                  <p className="text-gray-500">
-                    Tidak ada variabel untuk diisi. Buat template terlebih
-                    dahulu.
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {template.textAreas.map((area) => (
-                      <div key={area.id} className="space-y-2">
-                        <Label
-                          htmlFor={area.id}
-                          className="flex items-center gap-2"
-                        >
-                          {area.variableName}
-                          <Badge variant="outline" className="text-xs">
-                            {area.type}
-                          </Badge>
-                        </Label>
-                        {area.type === "text" ? (
-                          <Textarea
-                            id={area.id}
-                            value={area.value}
-                            onChange={(e) =>
-                              updateVariableValue(area.id, e.target.value)
-                            }
-                            placeholder={`Masukkan nilai untuk ${area.variableName}`}
-                            rows={3}
-                          />
-                        ) : area.type === "date" ? (
-                          <Input
-                            id={area.id}
-                            type="date"
-                            value={area.value}
-                            onChange={(e) =>
-                              updateVariableValue(area.id, e.target.value)
-                            }
-                          />
-                        ) : (
-                          <Input
-                            id={area.id}
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                const reader = new FileReader();
-                                reader.onload = (event) => {
-                                  updateVariableValue(
-                                    area.id,
-                                    event.target?.result as string
-                                  );
-                                };
-                                reader.readAsDataURL(file);
-                              }
-                            }}
-                          />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {template.textAreas.length > 0 && (
+          <TabsContent value="fill" className="grid grid-cols-2 gap-6">
+            <div className="col-span-1 flex flex-col gap-6">
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle>Preview Template</CardTitle>
-                    <CardDescription>
-                      Lihat hasil template dengan nilai yang telah diisi
-                    </CardDescription>
-                  </div>
-                  <Button
-                    onClick={exportAsPdf}
-                    variant="outline"
-                    className="flex items-center gap-2"
-                  >
-                    <FileDown className="h-4 w-4" />
-                    Export as PDF
-                  </Button>
+                <CardHeader>
+                  <CardTitle>Isi Template: {template.name}</CardTitle>
+                  <CardDescription>
+                    Masukkan nilai untuk setiap variabel yang telah dibuat
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div
-                    ref={previewRef}
-                    className="relative border rounded-lg overflow-hidden bg-white"
-                  >
-                    <div
-                      className="w-full relative"
-                      style={{
-                        aspectRatio: "600 / 800",
-                        backgroundImage:
-                          template.backgroundPdfs &&
-                          template.backgroundPdfs.length > 0
-                            ? `url(${
-                                template.backgroundPdfs[
-                                  (template.currentPage ?? 1) - 1
-                                ]
-                              })`
-                            : "none",
-                        backgroundSize: "contain",
-                        backgroundRepeat: "no-repeat",
-                        backgroundPosition: "center",
-                      }}
-                    >
-                      {template.textAreas.map((area) => (
-                        <div
-                          key={area.id}
-                          className="absolute flex items-center justify-center text-sm font-medium overflow-hidden"
-                          style={{
-                            left: `${(area.x / 600) * 100}%`,
-                            top: `${(area.y / 800) * 100}%`,
-                            width: `${(area.width / 600) * 100}%`,
-                            height: `${(area.height / 800) * 100}%`,
-                            backgroundColor: "transparent",
-                          }}
-                        >
-                          {area.type === "text" || area.type === "date" ? (
-                            <div className="w-full h-full p-1 text-center flex items-center justify-center text-black">
-                              {area.value || area.variableName}
-                            </div>
-                          ) : area.value ? (
-                            <img
-                              src={area.value || "/placeholder.svg"}
-                              alt={area.variableName}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full bg-gray-200 bg-opacity-50 flex items-center justify-center text-gray-500 text-xs">
-                              {area.variableName}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                  <div className="mb-4">
+                    <ConfigureData onSelectProject={handleSelectProject} />
                   </div>
+                  {template.pdfPages && template.pdfPages > 1 && (
+                    <div className="flex items-center justify-center gap-4 mb-4">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setTemplate((prev) => ({
+                            ...prev,
+                            currentPage: Math.max(
+                              1,
+                              (prev.currentPage ?? 1) - 1
+                            ),
+                          }))
+                        }
+                        disabled={(template.currentPage ?? 1) === 1}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm font-medium">
+                        Page {template.currentPage} of {template.pdfPages}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setTemplate((prev) => ({
+                            ...prev,
+                            currentPage: Math.min(
+                              template.pdfPages ?? 1,
+                              (prev.currentPage ?? 1) + 1
+                            ),
+                          }))
+                        }
+                        disabled={
+                          (template.currentPage ?? 1) === template.pdfPages
+                        }
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  )}
+                  {template.textAreas.length === 0 ? (
+                    <p className="text-gray-500">
+                      Tidak ada variabel untuk diisi. Buat template terlebih
+                      dahulu.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {template.textAreas
+                        .filter(
+                          (area) => area.page === (template.currentPage ?? 1)
+                        )
+                        .map((area) => (
+                          <div key={area.id} className="space-y-2">
+                            <Label
+                              htmlFor={area.id}
+                              className="flex items-center gap-2"
+                            >
+                              {area.variableName}
+                              <Badge variant="outline" className="text-xs">
+                                {area.type}
+                              </Badge>
+                              {area.type === "image" && area.imageFit && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {area.imageFit === "contain"
+                                    ? "Fit All"
+                                    : "Fill"}
+                                </Badge>
+                              )}
+                            </Label>
+                            {area.type === "text" ||
+                            area.type === "variable" ? (
+                              <Textarea
+                                id={area.id}
+                                value={area.value}
+                                onChange={(e) =>
+                                  updateVariableValue(area.id, e.target.value)
+                                }
+                                placeholder={`Masukkan nilai untuk ${area.variableName}`}
+                                rows={3}
+                              />
+                            ) : area.type === "date" ? (
+                              <Input
+                                id={area.id}
+                                type="date"
+                                value={area.value}
+                                onChange={(e) =>
+                                  updateVariableValue(area.id, e.target.value)
+                                }
+                              />
+                            ) : area.type === "image" ? (
+                              <Input
+                                id={area.id}
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = (event) => {
+                                      updateVariableValue(
+                                        area.id,
+                                        event.target?.result as string
+                                      );
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
-            )}
+            </div>
+            <div className="col-span-1">
+              {template.textAreas.length > 0 && (
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <div>
+                      <CardTitle>Preview Template</CardTitle>
+                      <CardDescription>
+                        Lihat hasil template dengan nilai yang telah diisi
+                      </CardDescription>
+                    </div>
+                    <Button
+                      onClick={exportAsPdf}
+                      variant="outline"
+                      className="flex items-center gap-2"
+                    >
+                      <FileDown className="h-4 w-4" />
+                      Export as PDF
+                    </Button>
+                  </CardHeader>
+                  <CardContent>
+                    <div
+                      ref={previewRef}
+                      className="relative border rounded-lg overflow-hidden bg-white"
+                    >
+                      <div
+                        className="w-full relative"
+                        style={{
+                          aspectRatio: "600 / 800",
+                          backgroundImage:
+                            template.backgroundPdfs &&
+                            template.backgroundPdfs.length > 0
+                              ? `url(${
+                                  template.backgroundPdfs[
+                                    (template.currentPage ?? 1) - 1
+                                  ]
+                                })`
+                              : "none",
+                          backgroundSize: "contain",
+                          backgroundRepeat: "no-repeat",
+                          backgroundPosition: "center",
+                        }}
+                      >
+                        {template.textAreas
+                          .filter(
+                            (area) => area.page === (template.currentPage ?? 1)
+                          )
+                          .map((area) => (
+                            <div
+                              key={area.id}
+                              className="absolute text-sm font-medium"
+                              style={{
+                                left: `${(area.x / 600) * 100}%`,
+                                top: `${(area.y / 800) * 100}%`,
+                                width: `${(area.width / 600) * 100}%`,
+                                height: `${(area.height / 800) * 100}%`,
+                                backgroundColor: "transparent",
+                                fontSize: `${area.fontSize}px`,
+                                fontWeight: area.fontWeight,
+                                overflow: "visible", // Allow content to overflow
+                              }}
+                            >
+                              {area.type === "text" ||
+                              area.type === "date" ||
+                              area.type === "variable" ? (
+                                <div
+                                  className="w-full h-full p-1 text-black"
+                                  style={{
+                                    whiteSpace: "pre-wrap", // Use pre-wrap to preserve whitespace and wrap
+                                    wordBreak: "break-word", // Break long words
+                                    textAlign: "left",
+                                    overflow: "visible", // Allow content to overflow within the text div
+                                  }}
+                                >
+                                  {area.value || area.variableName}
+                                </div>
+                              ) : (
+                                renderImageArea(area)
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           </TabsContent>
         </Tabs>
       </div>
